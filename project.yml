@@ -1,0 +1,154 @@
+define: 
+  - &model_file 'unet.model'
+  - &structure 'annular'
+
+workdir: './wd/'
+variables_annular: &variables
+  - variable:
+    name: r
+    type : vreal
+    lower: -0.5
+    upper: 0.5
+    size: 4
+  - variable:
+    name: w
+    type : vreal
+    lower: 0.0
+    upper: 1.2
+    size: 4
+  - variable:
+    name: dpillar
+    type : real
+    lower: 0.0
+    upper: 1.2
+
+variables_angles: 
+  - variable: l
+    type: vreal
+    lower: 1.0
+    upper: 3.0
+    size : 11
+  - variable: w
+    type: vreal
+    lower: 0.05
+    upper: 0.4
+    size : 11
+  - variable: xc
+    type: vreal
+    lower: -0.5
+    upper:  0.5
+    size : 4
+  - variable: yc
+    type: vreal
+    lower: -0.5
+    upper:  0.5
+    size : 11
+  - variable: dpillar
+    type: real
+    lower: 0.1
+    upper: 1.5
+  - variable: angles
+    type: vreal
+    lower: -1.57
+    upper:  1.57
+    size : 11
+
+datasets:
+  doe: &template-pop
+    name: doe
+    storages:
+      - metric
+      - epsilon_map
+      - leakage_map
+    variables: *variables
+    exporters:
+      npz.maps: ["epsilon_map", "leakage_map"]
+    populate-on-creation:
+      algo: LHS
+      count: 10
+  
+  main:
+    <<: *template-pop
+    name: main
+    populate-on-creation: false
+  selected:
+    <<: *template-pop
+    name: selected
+    populate-on-creation: false
+      
+algorithms:
+  - algorithm: model
+    actions:
+      - script_runner: train
+        shell: sbatch
+        parallel: false
+        path: user/templates/submit_unet.proto.sh
+        workdir: "./wd/"
+    config:
+      model_file: *model_file
+      epochs: 5
+      hours: 1
+      complexity: 3
+      angle: 90
+      decay: 1e-5
+      batch_size: 64
+      lr: 4e-4
+      validratio: 0.05
+  - algorithm: fom
+    actions:
+      - module_runner: evaluate-unet
+        shell: false
+        path: user.unet_inference
+        workdir: "./wd/"
+      - sequence_runner: evaluate-fdtd
+        actions:
+          - module_runner: input
+            shell: false
+            path: user.process_input
+            workdir: "./wd/"
+          - script_runner: fdtd-job
+            shell: sbatch
+            parallel: false
+            path: user/templates/submit_simulation.proto.sh
+            workdir: ./wd/
+          - module_runner: output
+            shell: false
+            path: user.process_output
+            workdir: "./wd/"
+
+
+    config:
+      type: *structure
+      workdir: "./wd/"
+      resolution: 10
+      variables: *variables
+
+
+  - algorithm: pso
+    actions:
+      - script_runner: run
+        shell: sbatch
+        parallel: false
+        path: user/templates/submit_optimize.proto.sh
+        workdir: "./wd/"
+
+    config:
+      fevals: 40000
+      model: *model_file
+      nagents: 40
+  
+  - algorithm: selection
+    name: sel
+    actions:
+      - script_runner: run
+        shell: bash
+        parallel: false
+        path: user/templates/submit_selection.proto.sh
+        workdir: "./wd/"
+    config:
+      num_clusters: 4
+      selection_size: 6
+      model: *model_file
+
+
+
